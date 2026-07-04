@@ -9,24 +9,27 @@ if "%1"=="-h" goto :help
 echo.
 echo === Dofus 1.29 HarvestBot ===
 echo.
-if "%1"=="" (
-    echo Starting harvesting...
-    echo Press Ctrl+C to stop.
-    echo.
-    "C:\Users\MAISON\AppData\Local\Programs\Python\Python312\python.exe" -m bot.main
-) else (
-    "C:\Users\MAISON\AppData\Local\Programs\Python\Python312\python.exe" -m bot.main %*
-)
+"C:\Users\MAISON\AppData\Local\Programs\Python\Python312\python.exe" -m bot.main %*
 if errorlevel 1 pause
 goto :eof
 
 :help
 echo Dofus 1.29 HarvestBot
 echo.
-echo Commands:
-echo   run_bot              Start harvesting
-echo   run_bot --dry-run    Scan only, no clicks
-echo   run_bot --calibrate  Open calibration
-echo   run_bot --log-level DEBUG  Verbose
+echo Usage: run_bot [options]
+echo.
+echo Options:
+echo   --profile NAME     Use saved profile (e.g. --profile wheat)
+echo   --list-profiles    Show available profiles
+echo   --dry-run          Scan only, no clicks
+echo   --calibrate        Open calibration
+echo   --capture-templates  Capture action button images
+echo   --log-level DEBUG  Verbose output
+echo.
+echo Examples:
+echo   run_bot --profile wheat
+echo   run_bot --profile wood --dry-run
+echo   run_bot --calibrate
+echo   run_bot --list-profiles
 echo.
 pause

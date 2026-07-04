@@ -1,10 +1,22 @@
 import json
-import os
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from typing import Optional
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class HSVProfile:
+    name: str
+    hsv_ranges: list = field(default_factory=lambda: [
+        {"lower": [35, 80, 80], "upper": [75, 255, 255]},
+    ])
+    min_area: int = 10
+    max_area: int = 300
+    harvest_wait_min: float = 3.0
+    harvest_wait_max: float = 5.0
 
 
 @dataclass
@@ -23,19 +35,17 @@ class BotConfig:
 
     resource_hsv_ranges: list = field(default_factory=lambda: [
         {"lower": [35, 80, 80], "upper": [75, 255, 255]},
-        {"lower": [20, 80, 80], "upper": [35, 255, 255]},
     ])
     resource_min_area: int = 10
     resource_max_area: int = 300
 
-    harvest_wait_min: float = 2.5
+    harvest_wait_min: float = 3.0
     harvest_wait_max: float = 5.0
     map_load_timeout: float = 15.0
     resource_search_interval: float = 0.5
     move_recheck_interval: float = 0.8
     explore_wait: float = 1.5
-
-    click_button: str = "left"
+    click_button: str = "right"
     move_duration: float = 0.2
 
     log_level: str = "INFO"
@@ -43,15 +53,16 @@ class BotConfig:
     screenshot_dir: str = "screenshots"
     debug_overlay: bool = True
 
+    profiles: list = field(default_factory=list)
+    active_profile: str = ""
+
     @classmethod
     def load(cls, path: str = "bot_config.json") -> "BotConfig":
         if not os.path.exists(path):
             return cls()
         with open(path) as f:
             data = json.load(f)
-
         data = cls._migrate(data)
-
         valid = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         cfg = cls(**valid)
         if len(cfg.resource_hsv_ranges) > 1:
@@ -69,11 +80,34 @@ class BotConfig:
             if "resource_hsv_ranges" not in data:
                 data["resource_hsv_ranges"] = [
                     {"lower": old_lower, "upper": old_upper},
-                    {"lower": [20, 80, 80], "upper": [35, 255, 255]},
                 ]
-                log.info("Migrated old config format (single HSV -> multi-range)")
         return data
 
     def save(self, path: str = "bot_config.json"):
         with open(path, "w") as f:
             json.dump(asdict(self), f, indent=2)
+
+    def apply_profile(self, name: str) -> bool:
+        for p in self.profiles:
+            if p["name"] == name:
+                self.resource_hsv_ranges = p["hsv_ranges"]
+                self.resource_min_area = p["min_area"]
+                self.resource_max_area = p["max_area"]
+                self.harvest_wait_min = p["harvest_wait_min"]
+                self.harvest_wait_max = p["harvest_wait_max"]
+                self.active_profile = name
+                return True
+        return False
+
+    def save_profile(self, name: str, hsv_ranges: list,
+                     min_area: int, max_area: int,
+                     harvest_min: float, harvest_max: float):
+        entry = {"name": name, "hsv_ranges": hsv_ranges,
+                 "min_area": min_area, "max_area": max_area,
+                 "harvest_wait_min": harvest_min,
+                 "harvest_wait_max": harvest_max}
+        for i, p in enumerate(self.profiles):
+            if p["name"] == name:
+                self.profiles[i] = entry
+                return
+        self.profiles.append(entry)

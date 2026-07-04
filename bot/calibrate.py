@@ -45,7 +45,8 @@ def run_calibration(config: BotConfig):
     log.info("SHEAR: Z/X=x  N/M=y  R=reset all")
     log.info("HSV manual tuning (H=toggle mask):")
     log.info("  1/2=Hlo  3/4=Hhi  5/6=Slo  7/8=Shi  9/0=Vlo  -/=Vhi")
-    log.info("  [/]=minArea  ;/'=maxArea  Shift=x5  S=save  Q=quit")
+    log.info("  [/]=minArea  ;/'=maxArea  Shift=x5")
+    log.info("  S=save as profile  U=list profiles  O=load profile  Q=quit")
     log.info("")
 
     _click_pos = []
@@ -107,6 +108,27 @@ def run_calibration(config: BotConfig):
                 config.resource_max_area = min(2000, config.resource_max_area + 5)
             elif k == ord('t'):
                 log.info(f"Current range: H=[{hsv_lower[0]}-{hsv_upper[0]}]")
+            elif k == ord('u'):
+                if not config.profiles:
+                    log.info("No saved profiles")
+                else:
+                    log.info("Profiles:")
+                    for p in config.profiles:
+                        log.info(f"  {p['name']}: H=[{p['hsv_ranges'][0]['lower'][0]}-{p['hsv_ranges'][0]['upper'][0]}]")
+            elif k == ord('o'):
+                if not config.profiles:
+                    log.info("No profiles to load")
+                else:
+                    names = [p['name'] for p in config.profiles]
+                    log.info(f"Profiles: {names}")
+                    pick = input("Load profile: ").strip()
+                    if config.apply_profile(pick):
+                        hsv_lower[:] = config.resource_hsv_ranges[0]["lower"]
+                        hsv_upper[:] = config.resource_hsv_ranges[0]["upper"]
+                        calibrating_hsv = True
+                        log.info(f"Loaded profile '{pick}'")
+                    else:
+                        log.info(f"Profile '{pick}' not found")
             elif k == ord('r'):
                 config.grid_origin_x = 140.0
                 config.grid_origin_y = 188.0
@@ -116,13 +138,28 @@ def run_calibration(config: BotConfig):
                 config.grid_shear_y = 0.0
                 log.info("Grid reset")
             elif k == ord('s'):
-                single = [{
-                    "lower": hsv_lower.tolist(),
-                    "upper": hsv_upper.tolist(),
-                }]
-                config.resource_hsv_ranges = single
+                cv2.putText(display, "Enter profile name in console...",
+                            (8, display.shape[0] - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 2)
+                cv2.imshow(CALIB_WIN_NAME, display)
+                cv2.waitKey(1)
+                name = input("Profile name (e.g., wheat, wood): ").strip()
+                if not name:
+                    log.info("Save cancelled")
+                    break
+                t_min = float(input(f"Harvest min seconds [{config.harvest_wait_min}]: ") or config.harvest_wait_min)
+                t_max = float(input(f"Harvest max seconds [{config.harvest_wait_max}]: ") or config.harvest_wait_max)
+                config.save_profile(
+                    name, [{"lower": hsv_lower.tolist(), "upper": hsv_upper.tolist()}],
+                    config.resource_min_area, config.resource_max_area,
+                    t_min, t_max,
+                )
+                config.resource_hsv_ranges = [{"lower": hsv_lower.tolist(), "upper": hsv_upper.tolist()}]
+                config.harvest_wait_min = t_min
+                config.harvest_wait_max = t_max
                 config.save()
-                log.info(f"Saved (1 range: H=[{hsv_lower[0]}-{hsv_upper[0]}])")
+                log.info(f"Profile '{name}' saved (H=[{hsv_lower[0]}-{hsv_upper[0]}])")
+                log.info(f"Profiles available: {[p['name'] for p in config.profiles]}")
 
             elif k == ord('w'):
                 step = CELL_STEP * 5 if shift else CELL_STEP
@@ -284,6 +321,7 @@ def _ui(display: np.ndarray, config: BotConfig, show_grid: bool, hsv_on: bool,
             f"V:[{lower[2]:>3d}-{upper[2]:>3d}]  "
             f"Area:[{config.resource_min_area}-{config.resource_max_area}]")
         lines.append("1/2=Hlo 3/4=Hhi 5/6=Slo 7/8=Shi 9/0=Vlo -=/+Vhi  [/]=min  ;/'=max")
+    lines.append(f"Active: {config.active_profile or '(none)'}  Profiles: {len(config.profiles)}")
     for i, line in enumerate(lines):
         cv2.putText(display, line, (8, 15 + i * 14),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.35, (180, 180, 180), 1)
