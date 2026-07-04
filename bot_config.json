@@ -1,0 +1,40 @@
+{
+  "window_title": "Dofus Retro",
+  "process_name": "Dofus.exe",
+  "grid_origin_x": 405,
+  "grid_origin_y": 46,
+  "cell_width": 53,
+  "cell_height": 27,
+  "grid_shear_x": -0.30000000000000004,
+  "grid_shear_y": 0.0,
+  "grid_rows": 21,
+  "grid_cols": 14,
+  "resource_hsv_ranges": [
+    {
+      "lower": [
+        17,
+        116,
+        177
+      ],
+      "upper": [
+        23,
+        187,
+        184
+      ]
+    }
+  ],
+  "resource_min_area": 5,
+  "resource_max_area": 403,
+  "harvest_wait_min": 2.0,
+  "harvest_wait_max": 4.5,
+  "map_load_timeout": 10.0,
+  "resource_search_interval": 0.3,
+  "move_recheck_interval": 0.5,
+  "explore_wait": 1.5,
+  "click_button": "left",
+  "move_duration": 0.15,
+  "log_level": "INFO",
+  "save_screenshots": false,
+  "screenshot_dir": "screenshots",
+  "debug_overlay": false
+}

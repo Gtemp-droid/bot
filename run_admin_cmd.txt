@@ -1,0 +1,1 @@
+& 'C:\Users\MAISON\AppData\Local\Programs\Python\Python312\python.exe' 'C:\Users\MAISON\Documents\Bot\test_windivert.py'
