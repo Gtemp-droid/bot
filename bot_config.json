@@ -24,7 +24,7 @@
     }
   ],
   "resource_min_area": 5,
-  "resource_max_area": 403,
+  "resource_max_area": 486,
   "harvest_wait_min": 15.0,
   "harvest_wait_max": 15.0,
   "map_load_timeout": 10.0,
@@ -33,6 +33,7 @@
   "explore_wait": 1.5,
   "click_button": "left",
   "move_duration": 0.15,
+  "map_wait_time": 5.0,
   "log_level": "INFO",
   "save_screenshots": false,
   "screenshot_dir": "screenshots",
@@ -56,9 +57,11 @@
       ],
       "min_area": 5,
       "max_area": 403,
-      "harvest_wait_min": 15.0,
-      "harvest_wait_max": 15.0
+      "harvest_wait_min": 0.5,
+      "harvest_wait_max": 0.5
     }
   ],
-  "active_profile": ""
+  "active_profile": "",
+  "route_file": "bot_routes.json",
+  "active_zone": ""
 }

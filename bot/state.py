@@ -1,9 +1,22 @@
 import logging
 import random
+import sys
 import time
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except ImportError:
+    _HAS_MSVCRT = False
+
+try:
+    import keyboard as _kb
+    _HAS_KEYBOARD = True
+except ImportError:
+    _HAS_KEYBOARD = False
 
 import cv2
 import numpy as np
@@ -13,6 +26,7 @@ from bot.config import BotConfig
 from bot.grid import IsometricGrid
 from bot.mouse import MouseController
 from bot.pathfinding import astar
+from bot.routes import RouteManager
 from bot.vision import ResourceDetector, TemplateMatcher
 
 log = logging.getLogger(__name__)
@@ -26,6 +40,8 @@ class BotState(Enum):
     SCAN = auto()
     CLICK_RESOURCE = auto()
     WAIT_HARVEST = auto()
+    NAVIGATE = auto()
+    WAIT_MAP_CHANGE = auto()
     EXPLORE = auto()
 
 
@@ -46,6 +62,15 @@ class HarvestBot:
         self._screenshot_count = 0
         self._target_screen: Optional[Tuple[int, int]] = None
         self._click_queue: List[Tuple[int, int]] = []
+        self._harvested_set: set = set()
+        self._last_pos: Optional[Tuple[int, int]] = None
+        self._map_change_time: float = 0.0
+
+        self._routes = RouteManager(config.route_file)
+        if config.active_zone:
+            self._routes.load_zone(config.active_zone)
+
+        self._hotkey_setup()
 
         self._debug_dir = Path(config.screenshot_dir)
         self._debug_dir.mkdir(exist_ok=True)
@@ -77,6 +102,12 @@ class HarvestBot:
 
         while self._running:
             try:
+                if _HAS_MSVCRT and msvcrt.kbhit():
+                    key = msvcrt.getch()
+                    if key in (b'q', b'Q'):
+                        log.info("Q pressed, stopping")
+                        self.stop()
+                        break
                 self._tick()
             except KeyboardInterrupt:
                 log.info("Interrupted")
@@ -85,8 +116,16 @@ class HarvestBot:
                 log.exception(f"Error: {e}")
                 time.sleep(2.0)
 
+    def _hotkey_setup(self):
+        if _HAS_KEYBOARD:
+            _kb.add_hotkey("esc", self.stop, suppress=False)
+            log.info("Global hotkey: ESC to stop (ESC still works in game)")
+
     def stop(self):
         self._running = False
+        if _HAS_KEYBOARD:
+            _kb.unhook_all_hotkeys()
+        log.info("Bot stopped")
 
     def _tick(self):
         if self.state == BotState.INIT:
@@ -115,23 +154,41 @@ class HarvestBot:
                 self._save_debug_frame(frame, points)
 
             if points:
-                log.info(f"> FOUND {len(points)} resource(s)")
-                self._no_resource_streak = 0
-                # Remove from queue any positions no longer visible
-                old = set(self._click_queue)
-                still_valid = old & set(points)
-                new_ones = [p for p in points if p not in old]
-                self._click_queue = [p for p in self._click_queue if p in still_valid]
-                self._click_queue.extend(new_ones)
-                log.info(f"  Queue: {len(self._click_queue)} pending")
-                self._target_screen = self._click_queue.pop(0)
-                self.state = BotState.CLICK_RESOURCE
+                new_ones = [p for p in points if p not in self._harvested_set]
+                if new_ones:
+                    log.info(f"> FOUND {len(new_ones)} new resource(s)")
+                    self._no_resource_streak = 0
+                    for p in new_ones:
+                        if p not in self._click_queue:
+                            self._click_queue.append(p)
+                    # Sort queue by proximity to last position (or center if none)
+                    ref = self._last_pos or (w // 2, h // 2)
+                    self._click_queue.sort(key=lambda p: (p[0] - ref[0]) ** 2 + (p[1] - ref[1]) ** 2)
+                    log.info(f"  Queue: {len(self._click_queue)} pending, closest first")
+                    self._target_screen = self._click_queue.pop(0)
+                    self.state = BotState.CLICK_RESOURCE
+                else:
+                    log.info(f". Only already-harvested resources visible (streak={self._no_resource_streak})")
+                    self._no_resource_streak += 1
+                    if self._no_resource_streak >= 3:
+                        if self._routes.has_steps():
+                            self._click_queue.clear()
+                            self._harvested_set.clear()
+                            self.state = BotState.NAVIGATE
+                        else:
+                            self.state = BotState.EXPLORE
+                    else:
+                        time.sleep(self.config.resource_search_interval)
             else:
                 self._no_resource_streak += 1
                 log.info(f". No resources (streak={self._no_resource_streak})")
-                self._click_queue.clear()
                 if self._no_resource_streak >= 3:
-                    self.state = BotState.EXPLORE
+                    if self._routes.has_steps():
+                        self._click_queue.clear()
+                        self._harvested_set.clear()
+                        self.state = BotState.NAVIGATE
+                    else:
+                        self.state = BotState.EXPLORE
                 else:
                     time.sleep(self.config.resource_search_interval)
 
@@ -140,6 +197,8 @@ class HarvestBot:
                 self.state = BotState.SCAN
                 return
             sx, sy = self._target_screen
+            self._harvested_set.add((sx, sy))
+            self._last_pos = (sx, sy)
             log.info(f">> Right-click resource at ({sx}, {sy})")
             if not self.dry_run:
                 self.mouse.click(button="right", x=sx, y=sy)
@@ -177,6 +236,37 @@ class HarvestBot:
                 self.mouse.click(x=ax, y=ay)
                 time.sleep(0.5)
             self.state = BotState.SCAN
+
+        elif self.state == BotState.NAVIGATE:
+            frame = self.capture.capture()
+            if frame is None:
+                time.sleep(0.5)
+                return
+            fh, fw = frame.shape[:2]
+            pos = self._routes.get_click_pos(fw, fh)
+            if pos is None:
+                log.warning("No navigation step available, falling back to SCAN")
+                self.state = BotState.SCAN
+                return
+            dx, dy = pos
+            dir_label = self._routes.current_dir()
+            log.info(f">> Navigate {dir_label} -> ({dx}, {dy})")
+            if not self.dry_run:
+                self.mouse.click(x=dx, y=dy)
+            self._routes.advance()
+            self._map_change_time = time.time()
+            self._click_queue.clear()
+            self._harvested_set.clear()
+            self._last_pos = None
+            self.state = BotState.WAIT_MAP_CHANGE
+
+        elif self.state == BotState.WAIT_MAP_CHANGE:
+            elapsed = time.time() - self._map_change_time
+            if elapsed >= self.config.map_wait_time:
+                log.info(f"Map change waited {elapsed:.1f}s, resuming scan")
+                self.state = BotState.CHECK_OK
+            else:
+                time.sleep(0.3)
 
         elif self.state == BotState.EXPLORE:
             fw, fh = 1280, 720
