@@ -45,7 +45,7 @@ class HarvestBot:
         self._explore_idx = 0
         self._screenshot_count = 0
         self._target_screen: Optional[Tuple[int, int]] = None
-        self._last_clicked: Optional[Tuple[int, int]] = None
+        self._click_queue: List[Tuple[int, int]] = []
 
         self._debug_dir = Path(config.screenshot_dir)
         self._debug_dir.mkdir(exist_ok=True)
@@ -117,11 +117,19 @@ class HarvestBot:
             if points:
                 log.info(f"> FOUND {len(points)} resource(s)")
                 self._no_resource_streak = 0
-                self._target_screen = self._pick_best(points, w, h)
+                # Remove from queue any positions no longer visible
+                old = set(self._click_queue)
+                still_valid = old & set(points)
+                new_ones = [p for p in points if p not in old]
+                self._click_queue = [p for p in self._click_queue if p in still_valid]
+                self._click_queue.extend(new_ones)
+                log.info(f"  Queue: {len(self._click_queue)} pending")
+                self._target_screen = self._click_queue.pop(0)
                 self.state = BotState.CLICK_RESOURCE
             else:
                 self._no_resource_streak += 1
                 log.info(f". No resources (streak={self._no_resource_streak})")
+                self._click_queue.clear()
                 if self._no_resource_streak >= 3:
                     self.state = BotState.EXPLORE
                 else:
@@ -188,10 +196,6 @@ class HarvestBot:
                 self.mouse.click(x=t[0], y=t[1])
                 time.sleep(self.config.move_recheck_interval)
             self.state = BotState.SCAN
-
-    def _pick_best(self, points, fw, fh):
-        cx, cy = fw // 2, fh // 2
-        return min(points, key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
 
     def _save_debug_frame(self, frame, points):
         debug = frame.copy()
