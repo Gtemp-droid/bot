@@ -47,7 +47,7 @@ class BotConfig:
     explore_wait: float = 1.5
     click_button: str = "right"
     move_duration: float = 0.2
-    map_wait_time: float = 3.0
+    map_wait_time: float = 5.0
 
     log_level: str = "INFO"
     save_screenshots: bool = True

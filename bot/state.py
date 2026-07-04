@@ -1,9 +1,22 @@
 import logging
 import random
+import sys
 import time
 from enum import Enum, auto
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+try:
+    import msvcrt
+    _HAS_MSVCRT = True
+except ImportError:
+    _HAS_MSVCRT = False
+
+try:
+    import keyboard as _kb
+    _HAS_KEYBOARD = True
+except ImportError:
+    _HAS_KEYBOARD = False
 
 import cv2
 import numpy as np
@@ -50,11 +63,14 @@ class HarvestBot:
         self._target_screen: Optional[Tuple[int, int]] = None
         self._click_queue: List[Tuple[int, int]] = []
         self._harvested_set: set = set()
+        self._last_pos: Optional[Tuple[int, int]] = None
         self._map_change_time: float = 0.0
 
         self._routes = RouteManager(config.route_file)
         if config.active_zone:
             self._routes.load_zone(config.active_zone)
+
+        self._hotkey_setup()
 
         self._debug_dir = Path(config.screenshot_dir)
         self._debug_dir.mkdir(exist_ok=True)
@@ -86,6 +102,12 @@ class HarvestBot:
 
         while self._running:
             try:
+                if _HAS_MSVCRT and msvcrt.kbhit():
+                    key = msvcrt.getch()
+                    if key in (b'q', b'Q'):
+                        log.info("Q pressed, stopping")
+                        self.stop()
+                        break
                 self._tick()
             except KeyboardInterrupt:
                 log.info("Interrupted")
@@ -94,8 +116,16 @@ class HarvestBot:
                 log.exception(f"Error: {e}")
                 time.sleep(2.0)
 
+    def _hotkey_setup(self):
+        if _HAS_KEYBOARD:
+            _kb.add_hotkey("esc", self.stop, suppress=False)
+            log.info("Global hotkey: ESC to stop (ESC still works in game)")
+
     def stop(self):
         self._running = False
+        if _HAS_KEYBOARD:
+            _kb.unhook_all_hotkeys()
+        log.info("Bot stopped")
 
     def _tick(self):
         if self.state == BotState.INIT:
@@ -131,7 +161,10 @@ class HarvestBot:
                     for p in new_ones:
                         if p not in self._click_queue:
                             self._click_queue.append(p)
-                    log.info(f"  Queue: {len(self._click_queue)} pending")
+                    # Sort queue by proximity to last position (or center if none)
+                    ref = self._last_pos or (w // 2, h // 2)
+                    self._click_queue.sort(key=lambda p: (p[0] - ref[0]) ** 2 + (p[1] - ref[1]) ** 2)
+                    log.info(f"  Queue: {len(self._click_queue)} pending, closest first")
                     self._target_screen = self._click_queue.pop(0)
                     self.state = BotState.CLICK_RESOURCE
                 else:
@@ -165,6 +198,7 @@ class HarvestBot:
                 return
             sx, sy = self._target_screen
             self._harvested_set.add((sx, sy))
+            self._last_pos = (sx, sy)
             log.info(f">> Right-click resource at ({sx}, {sy})")
             if not self.dry_run:
                 self.mouse.click(button="right", x=sx, y=sy)
@@ -223,6 +257,7 @@ class HarvestBot:
             self._map_change_time = time.time()
             self._click_queue.clear()
             self._harvested_set.clear()
+            self._last_pos = None
             self.state = BotState.WAIT_MAP_CHANGE
 
         elif self.state == BotState.WAIT_MAP_CHANGE:
