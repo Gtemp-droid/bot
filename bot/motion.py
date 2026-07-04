@@ -27,6 +27,50 @@ class MotionDetector:
         self._global_motion: float = 0.0
         self._kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
 
+        self._char_template: Optional[np.ndarray] = None
+        self._template_wh: Optional[Tuple[int, int]] = None
+        self._last_match_method: str = "none"
+        self._template_conf: float = 0.0
+        self._template_update_counter: int = 0
+
+    def _extract_template(self, frame: np.ndarray, bbox_center_wh, margin: int = 5):
+        cx, cy, w, h = bbox_center_wh
+        x1 = max(0, cx - w // 2 - margin)
+        y1 = max(0, cy - h // 2 - margin)
+        x2 = min(frame.shape[1], cx + w // 2 + margin)
+        y2 = min(frame.shape[0], cy + h // 2 + margin)
+        patch = frame[y1:y2, x1:x2]
+        if patch.shape[0] > 10 and patch.shape[1] > 10:
+            self._char_template = patch.copy()
+            self._template_wh = (patch.shape[1], patch.shape[0])
+
+    def _match_template(self, frame: np.ndarray):
+        if self._char_template is None or self._template_wh is None:
+            return None, 0.0
+        tw, th = self._template_wh
+        cx, cy = self._char_pos or (frame.shape[1] // 2, frame.shape[0] // 2)
+
+        margin = 150
+        x1 = max(0, cx - margin)
+        y1 = max(0, cy - margin)
+        x2 = min(frame.shape[1], cx + margin)
+        y2 = min(frame.shape[0], cy + margin)
+
+        search = frame[y1:y2, x1:x2]
+        if search.shape[0] < th or search.shape[1] < tw:
+            return None, 0.0
+
+        gray_search = cv2.cvtColor(search, cv2.COLOR_BGR2GRAY)
+        gray_tmpl = cv2.cvtColor(self._char_template, cv2.COLOR_BGR2GRAY)
+
+        result = cv2.matchTemplate(gray_search, gray_tmpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(result)
+        if max_val > 0.6:
+            tx = x1 + max_loc[0] + tw // 2
+            ty = y1 + max_loc[1] + th // 2
+            return (tx, ty), max_val
+        return None, max_val
+
     def update(self, frame: np.ndarray):
         if self._prev_frame is None:
             self._prev_frame = frame.copy()
@@ -57,15 +101,32 @@ class MotionDetector:
                     cx = int(M["m10"] / M["m00"])
                     cy = int(M["m01"] / M["m00"])
                     best_pos = (cx, cy)
-                    x, y, bw, bh = cv2.boundingRect(cnt)
+                    bx, by, bw, bh = cv2.boundingRect(cnt)
                     best_bbox = (cx, cy, bw, bh)
 
         if best_pos:
             self._char_pos = best_pos
             self._char_bbox = best_bbox
             self._char_history.append(best_pos)
+            self._last_match_method = "motion"
+            self._template_conf = 1.0
+
+            self._extract_template(frame, best_bbox)
             if len(self._char_history) > self.history_size:
                 self._char_history.pop(0)
+
+        else:
+            tm_pos, tm_conf = self._match_template(frame)
+            if tm_pos:
+                self._char_pos = tm_pos
+                tw = self._template_wh[0] if self._template_wh else 20
+                th = self._template_wh[1] if self._template_wh else 20
+                self._char_bbox = (tm_pos[0], tm_pos[1], tw, th)
+                self._char_history.append(tm_pos)
+                self._last_match_method = "template"
+                self._template_conf = tm_conf
+                if len(self._char_history) > self.history_size:
+                    self._char_history.pop(0)
 
         self._prev_frame = frame.copy()
 
@@ -92,8 +153,8 @@ class MotionDetector:
     def local_motion_ratio(self, center_x: int, center_y: int, radius: int = 50) -> float:
         if self._last_thresh is None:
             return 0.0
-        h, w = self._last_thresh.shape
-        mask = np.zeros((h, w), dtype=np.uint8)
+        hh, ww = self._last_thresh.shape
+        mask = np.zeros((hh, ww), dtype=np.uint8)
         cv2.circle(mask, (int(center_x), int(center_y)), radius, 255, -1)
         masked = cv2.bitwise_and(self._last_thresh, mask)
         changed = cv2.countNonZero(masked)
@@ -107,21 +168,27 @@ class MotionDetector:
         self._char_history.clear()
         self._char_bbox = None
         self._global_motion = 0.0
+        self._char_template = None
+        self._template_wh = None
+        self._last_match_method = "none"
+        self._template_conf = 0.0
 
     def draw_debug(self, frame: np.ndarray):
         if self._char_bbox:
             cx, cy, w, h = self._char_bbox
+            color = (0, 255, 0) if self._last_match_method == "motion" else (255, 200, 0)
             cv2.rectangle(frame, (cx - w // 2, cy - h // 2),
-                          (cx + w // 2, cy + h // 2), (0, 255, 0), 2)
-            cv2.drawMarker(frame, (cx, cy), (0, 255, 0),
-                           cv2.MARKER_CROSS, 12, 2)
+                          (cx + w // 2, cy + h // 2), color, 2)
+            cv2.drawMarker(frame, (cx, cy), color, cv2.MARKER_CROSS, 12, 2)
         info = [
             f"Motion: {self._global_motion:.4f}",
-            f"Moving: {self.is_character_moving()}",
+            f"Track: {self._last_match_method}",
         ]
         pos = self._char_pos
         if pos:
             info.append(f"Char: ({pos[0]}, {pos[1]})")
+        if self._last_match_method == "template":
+            info.append(f"Tmpl conf: {self._template_conf:.2f}")
         for i, line in enumerate(info):
             cv2.putText(frame, line, (8, frame.shape[0] - 30 + i * 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 255, 0), 1)

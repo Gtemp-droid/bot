@@ -20,7 +20,6 @@ def run_character_calibration(config: BotConfig):
         return
 
     motion = MotionDetector(config)
-    # Hack: ensure we start with config values even if trackbars haven't moved
     motion.motion_threshold = config.motion_threshold
     motion.char_min_area = config.character_min_area
     motion.char_max_area = config.character_max_area
@@ -34,9 +33,9 @@ def run_character_calibration(config: BotConfig):
     cv2.createTrackbar("Pause", WIN_NAME, 0, 1, lambda v: None)
 
     log.info("=== Character Calibration ===")
-    log.info("Adjust trackbars until the character is outlined in green.")
-    log.info("Press S to save parameters to bot_config.json")
-    log.info("Press Q to quit, R to reset motion history.")
+    log.info("Green box = tracked by motion    Blue box = tracked by template")
+    log.info("Adjust trackbars until the character is outlined in green when moving.")
+    log.info("Press S to save, Q to quit, R to reset.")
 
     paused = False
 
@@ -46,7 +45,7 @@ def run_character_calibration(config: BotConfig):
             break
         if key == ord('r'):
             motion.reset()
-            log.info("Motion history reset")
+            log.info("History reset")
             continue
         if key == ord('s'):
             config.motion_threshold = motion.motion_threshold
@@ -74,9 +73,28 @@ def run_character_calibration(config: BotConfig):
         display = frame.copy()
         motion.draw_debug(display)
 
+        hh, ww = display.shape[:2]
+
+        # Template preview in top-right corner
+        if motion._char_template is not None:
+            tmpl = motion._char_template.copy()
+            scale = min(80 / tmpl.shape[1], 80 / tmpl.shape[0])
+            new_w = int(tmpl.shape[1] * scale)
+            new_h = int(tmpl.shape[0] * scale)
+            tmpl_small = cv2.resize(tmpl, (new_w, new_h))
+            margin = 10
+            x_off = ww - new_w - margin
+            y_off = margin
+            display[y_off:y_off + new_h, x_off:x_off + new_w] = tmpl_small
+            cv2.rectangle(display, (x_off, y_off),
+                          (x_off + new_w, y_off + new_h), (255, 200, 0), 1)
+            cv2.putText(display, "template", (x_off, y_off + new_h + 14),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.35, (255, 200, 0), 1)
+
         info = [
             f"Threshold={motion.motion_threshold}  "
-            f"Area=[{motion.char_min_area}-{motion.char_max_area}]",
+            f"Area=[{motion.char_min_area}-{motion.char_max_area}]  "
+            f"Method={motion._last_match_method}",
             "S=save  Q=quit  R=reset  Pause=freeze",
         ]
         for i, line in enumerate(info):
@@ -87,10 +105,10 @@ def run_character_calibration(config: BotConfig):
 
         if motion._last_thresh is not None:
             mask_bgr = cv2.cvtColor(motion._last_thresh, cv2.COLOR_GRAY2BGR)
-            hh, ww = mask_bgr.shape[:2]
-            scale = min(400 / ww, 300 / hh)
-            new_w, new_h = int(ww * scale), int(hh * scale)
-            mask_small = cv2.resize(mask_bgr, (new_w, new_h))
+            sh, sw = mask_bgr.shape[:2]
+            scale = min(400 / sw, 300 / sh)
+            mw, mh = int(sw * scale), int(sh * scale)
+            mask_small = cv2.resize(mask_bgr, (mw, mh))
             cv2.imshow(MASK_WIN, mask_small)
 
     cv2.destroyAllWindows()
