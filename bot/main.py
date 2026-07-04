@@ -30,12 +30,16 @@ def main():
                         help="Test a navigation route (5s between clicks, no harvesting)")
     parser.add_argument("--route-delay", type=float, default=5.0,
                         help="Delay between route clicks in seconds (default: 5.0)")
+    parser.add_argument("--calibrate-character", action="store_true",
+                        help="Calibrate character detection (motion diff)")
     parser.add_argument("--capture-templates", action="store_true",
                         help="Capture UI template images")
     parser.add_argument("--list-profiles", action="store_true",
                         help="List saved profiles and exit")
     parser.add_argument("--zone", default=None,
                         help="Zone name for map navigation route (e.g., --zone zone_a)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Show real-time tracking window (green/blue box)")
     args = parser.parse_args()
 
     config = BotConfig.load(args.config)
@@ -55,6 +59,11 @@ def main():
                 log.info(f"  {p['name']}: "
                          f"H=[{r['lower'][0]}-{r['upper'][0]}] "
                          f"wait={p['harvest_wait_min']}-{p['harvest_wait_max']}s")
+        return
+
+    if args.calibrate_character:
+        from bot.character_calibrate import run_character_calibration
+        run_character_calibration(config)
         return
 
     if args.capture_templates:
@@ -83,6 +92,10 @@ def main():
             log.error(f"Profile '{args.profile}' not found. Use --list-profiles to see available.")
             return
         log.info(f"Using profile: {args.profile}")
+
+    if args.debug:
+        config.debug_overlay = True
+        log.info("Debug window enabled")
 
     if args.zone:
         config.active_zone = args.zone

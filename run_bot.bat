@@ -19,12 +19,14 @@ echo.
 echo Usage: run_bot [options]
 echo.
 echo Options:
-echo   --profile NAME     Use saved profile (e.g. --profile wheat)
-echo   --list-profiles    Show available profiles
-echo   --dry-run          Scan only, no clicks
-echo   --calibrate        Open calibration
+echo   --profile NAME       Use saved profile (e.g. --profile wheat)
+echo   --list-profiles      Show available profiles
+echo   --dry-run            Scan only, no clicks
+echo   --calibrate          Open calibration
+echo   --calibrate-character  Calibrate character detection
 echo   --capture-templates  Capture action button images
-echo   --log-level DEBUG  Verbose output
+echo   --log-level DEBUG    Verbose output
+echo   --debug             Show real-time tracking window
 echo.
 echo Examples:
 echo   run_bot --profile wheat
