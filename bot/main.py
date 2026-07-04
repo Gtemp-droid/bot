@@ -38,6 +38,8 @@ def main():
                         help="List saved profiles and exit")
     parser.add_argument("--zone", default=None,
                         help="Zone name for map navigation route (e.g., --zone zone_a)")
+    parser.add_argument("--debug", action="store_true",
+                        help="Show real-time tracking window (green/blue box)")
     args = parser.parse_args()
 
     config = BotConfig.load(args.config)
@@ -90,6 +92,10 @@ def main():
             log.error(f"Profile '{args.profile}' not found. Use --list-profiles to see available.")
             return
         log.info(f"Using profile: {args.profile}")
+
+    if args.debug:
+        config.debug_overlay = True
+        log.info("Debug window enabled")
 
     if args.zone:
         config.active_zone = args.zone

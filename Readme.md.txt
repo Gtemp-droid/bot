@@ -20,3 +20,6 @@ Executer:
 
 run_bot --profile frene--zone frenezone
 Esc to quit
+
+option:
+--debug pour afficher la fenetre de rtacking en temps réel
