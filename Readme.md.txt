@@ -8,7 +8,13 @@ Test:
 
 route: run_bot --run-route ma_zone
 calibrage recolte: run_bot --profile wheat --dry-run
+detection de personnage: run_bot  --calibrate-character
 
+TODO: 
+detection d'entrée en ciombat.
+détection tour
+attaquer (detection mouvement + case ciblable)
+terminer combat et recommencer à recolter
 
 Executer:
 

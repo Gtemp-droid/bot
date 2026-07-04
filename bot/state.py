@@ -25,6 +25,7 @@ from bot.capture import WindowCapture
 from bot.config import BotConfig
 from bot.grid import IsometricGrid
 from bot.mouse import MouseController
+from bot.motion import MotionDetector
 from bot.pathfinding import astar
 from bot.routes import RouteManager
 from bot.vision import ResourceDetector, TemplateMatcher
@@ -54,6 +55,7 @@ class HarvestBot:
         self.templates = TemplateMatcher(config)
         self.grid = IsometricGrid(config)
         self.mouse = MouseController(config)
+        self._motion = MotionDetector(config)
         self.state = BotState.INIT
         self._running = True
         self._harvest_count = 0
@@ -65,6 +67,7 @@ class HarvestBot:
         self._harvested_set: set = set()
         self._last_pos: Optional[Tuple[int, int]] = None
         self._map_change_time: float = 0.0
+        self._motion_stable_start: float = 0.0
 
         self._routes = RouteManager(config.route_file)
         if config.active_zone:
@@ -146,6 +149,7 @@ class HarvestBot:
                 time.sleep(0.5)
                 return
 
+            self._motion.update(frame)
             h, w = frame.shape[:2]
             points = self.detector.find_resource_centers(frame)
 
@@ -196,6 +200,15 @@ class HarvestBot:
             if not self._target_screen:
                 self.state = BotState.SCAN
                 return
+
+            # Wait for character to stop moving before clicking
+            frame = self.capture.capture()
+            if frame is not None:
+                self._motion.update(frame)
+            if self._motion.is_character_moving():
+                time.sleep(0.3)
+                return
+
             sx, sy = self._target_screen
             self._harvested_set.add((sx, sy))
             self._last_pos = (sx, sy)
@@ -203,15 +216,57 @@ class HarvestBot:
             if not self.dry_run:
                 self.mouse.click(button="right", x=sx, y=sy)
             self._harvest_start = time.time()
+            self._motion_stable_start = 0.0
             self.state = BotState.WAIT_HARVEST
 
         elif self.state == BotState.WAIT_HARVEST:
             elapsed = time.time() - self._harvest_start
-            wait = random.uniform(self.config.harvest_wait_min, self.config.harvest_wait_max)
-            if elapsed >= wait:
+            frame = self.capture.capture()
+            if frame is None:
+                time.sleep(0.3)
+                return
+            self._motion.update(frame)
+
+            global_m = self._motion.global_motion_ratio()
+            local_m = self._motion.local_motion_ratio(
+                self._last_pos[0], self._last_pos[1], radius=40
+            ) if self._last_pos else 0.0
+
+            moving = global_m > 0.005 or local_m > 0.01
+            if moving:
+                self._motion_stable_start = 0.0
+                time.sleep(0.3)
+                return
+
+            # No significant motion — start or continue stability timer
+            if self._motion_stable_start == 0.0:
+                self._motion_stable_start = time.time()
+            stable_for = time.time() - self._motion_stable_start
+
+            # Check if resource is still present
+            points = self.detector.find_resource_centers(frame)
+            resource_gone = (
+                self._target_screen not in points
+                if self._target_screen else True
+            )
+
+            if resource_gone and stable_for >= 0.5:
                 self._harvest_count += 1
                 log.info(f"< Harvest #{self._harvest_count} ({elapsed:.1f}s)")
                 self._target_screen = None
+                self._motion_stable_start = 0.0
+                self.state = BotState.CHECK_OK
+            elif stable_for >= 3.0 and not resource_gone:
+                # Stuck: resource still there, no motion — click didn't register
+                log.warning(f"Stuck at resource after {elapsed:.1f}s, retrying")
+                self._target_screen = None
+                self._motion_stable_start = 0.0
+                self.state = BotState.SCAN
+            elif elapsed >= self.config.harvest_wait_max:
+                self._harvest_count += 1
+                log.info(f"< Harvest #{self._harvest_count} ({elapsed:.1f}s) [timeout]")
+                self._target_screen = None
+                self._motion_stable_start = 0.0
                 self.state = BotState.CHECK_OK
             else:
                 time.sleep(0.3)
@@ -262,11 +317,36 @@ class HarvestBot:
 
         elif self.state == BotState.WAIT_MAP_CHANGE:
             elapsed = time.time() - self._map_change_time
-            if elapsed >= self.config.map_wait_time:
-                log.info(f"Map change waited {elapsed:.1f}s, resuming scan")
-                self.state = BotState.CHECK_OK
-            else:
+            frame = self.capture.capture()
+            if frame is None:
+                time.sleep(0.5)
+                return
+            self._motion.update(frame)
+
+            if elapsed < 0.5:
                 time.sleep(0.3)
+                return
+
+            global_m = self._motion.global_motion_ratio()
+
+            if global_m < 0.002:
+                if self._motion_stable_start == 0.0:
+                    self._motion_stable_start = time.time()
+                elif time.time() - self._motion_stable_start >= 0.5:
+                    log.info(f"Map change stable after {elapsed:.1f}s")
+                    self._motion_stable_start = 0.0
+                    self.state = BotState.CHECK_OK
+                    return
+            else:
+                self._motion_stable_start = 0.0
+
+            if elapsed >= self.config.map_load_timeout:
+                log.info(f"Map change timeout ({elapsed:.1f}s)")
+                self._motion_stable_start = 0.0
+                self.state = BotState.CHECK_OK
+                return
+
+            time.sleep(0.3)
 
         elif self.state == BotState.EXPLORE:
             fw, fh = 1280, 720

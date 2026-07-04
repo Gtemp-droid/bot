@@ -30,6 +30,8 @@ def main():
                         help="Test a navigation route (5s between clicks, no harvesting)")
     parser.add_argument("--route-delay", type=float, default=5.0,
                         help="Delay between route clicks in seconds (default: 5.0)")
+    parser.add_argument("--calibrate-character", action="store_true",
+                        help="Calibrate character detection (motion diff)")
     parser.add_argument("--capture-templates", action="store_true",
                         help="Capture UI template images")
     parser.add_argument("--list-profiles", action="store_true",
@@ -55,6 +57,11 @@ def main():
                 log.info(f"  {p['name']}: "
                          f"H=[{r['lower'][0]}-{r['upper'][0]}] "
                          f"wait={p['harvest_wait_min']}-{p['harvest_wait_max']}s")
+        return
+
+    if args.calibrate_character:
+        from bot.character_calibrate import run_character_calibration
+        run_character_calibration(config)
         return
 
     if args.capture_templates:

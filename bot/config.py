@@ -49,6 +49,10 @@ class BotConfig:
     move_duration: float = 0.2
     map_wait_time: float = 5.0
 
+    motion_threshold: int = 30
+    character_min_area: int = 50
+    character_max_area: int = 500
+
     log_level: str = "INFO"
     save_screenshots: bool = True
     screenshot_dir: str = "screenshots"
