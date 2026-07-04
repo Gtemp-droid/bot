@@ -25,8 +25,8 @@
   ],
   "resource_min_area": 5,
   "resource_max_area": 403,
-  "harvest_wait_min": 2.0,
-  "harvest_wait_max": 4.5,
+  "harvest_wait_min": 15.0,
+  "harvest_wait_max": 15.0,
   "map_load_timeout": 10.0,
   "resource_search_interval": 0.3,
   "move_recheck_interval": 0.5,
@@ -36,5 +36,29 @@
   "log_level": "INFO",
   "save_screenshots": false,
   "screenshot_dir": "screenshots",
-  "debug_overlay": false
+  "debug_overlay": false,
+  "profiles": [
+    {
+      "name": "frene",
+      "hsv_ranges": [
+        {
+          "lower": [
+            17,
+            116,
+            177
+          ],
+          "upper": [
+            23,
+            187,
+            184
+          ]
+        }
+      ],
+      "min_area": 5,
+      "max_area": 403,
+      "harvest_wait_min": 15.0,
+      "harvest_wait_max": 15.0
+    }
+  ],
+  "active_profile": ""
 }

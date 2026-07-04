@@ -13,13 +13,16 @@ from bot.config import BotConfig
 from bot.grid import IsometricGrid
 from bot.mouse import MouseController
 from bot.pathfinding import astar
-from bot.vision import ResourceDetector
+from bot.vision import ResourceDetector, TemplateMatcher
 
 log = logging.getLogger(__name__)
+
+TEMPLATE_DIR = Path(__file__).parent / "templates"
 
 
 class BotState(Enum):
     INIT = auto()
+    CHECK_OK = auto()
     SCAN = auto()
     CLICK_RESOURCE = auto()
     WAIT_HARVEST = auto()
@@ -32,6 +35,7 @@ class HarvestBot:
         self.dry_run = dry_run
         self.capture = WindowCapture(config.window_title)
         self.detector = ResourceDetector(config)
+        self.templates = TemplateMatcher(config)
         self.grid = IsometricGrid(config)
         self.mouse = MouseController(config)
         self.state = BotState.INIT
@@ -41,23 +45,34 @@ class HarvestBot:
         self._explore_idx = 0
         self._screenshot_count = 0
         self._target_screen: Optional[Tuple[int, int]] = None
+        self._last_clicked: Optional[Tuple[int, int]] = None
 
         self._debug_dir = Path(config.screenshot_dir)
         self._debug_dir.mkdir(exist_ok=True)
+        TEMPLATE_DIR.mkdir(exist_ok=True)
+        ok_path = TEMPLATE_DIR / "ok.png"
+        if ok_path.exists():
+            self.templates.load_template("ok", str(ok_path))
+            log.info(f"Loaded OK template: {ok_path}")
+        else:
+            log.info("No ok.png template found -- level-up popup won't be auto-dismissed")
+            log.info("  Capture one with: run_bot --capture-templates")
 
     def run(self):
         log.info("=" * 45)
         log.info("Dofus 1.29 HarvestBot (CV only)")
-        log.info(f"Grid: ({self.config.grid_origin_x},{self.config.grid_origin_y}) "
-                 f"{self.config.cell_width}x{self.config.cell_height}")
-        log.info(f"HSV ranges: {len(self.config.resource_hsv_ranges)}")
+        log.info(f"Grid: ({self.config.grid_origin_x:.0f},{self.config.grid_origin_y:.0f}) "
+                 f"{self.config.cell_width:.1f}x{self.config.cell_height:.1f}")
+        pname = self.config.active_profile or "(default)"
+        log.info(f"Profile: {pname}")
         for i, r in enumerate(self.config.resource_hsv_ranges):
-            log.info(f"  Range {i}: H=[{r['lower'][0]}-{r['upper'][0]}] "
+            log.info(f"  HSV: H=[{r['lower'][0]}-{r['upper'][0]}] "
                      f"S=[{r['lower'][1]}-{r['upper'][1]}] "
                      f"V=[{r['lower'][2]}-{r['upper'][2]}]")
-        log.info(f"Area filter: {self.config.resource_min_area}-{self.config.resource_max_area}")
+        log.info(f"Area: {self.config.resource_min_area}-{self.config.resource_max_area}  "
+                 f"Harvest: {self.config.harvest_wait_min}-{self.config.harvest_wait_max}s")
         if self.dry_run:
-            log.info("DRY RUN mode -- no clicks will be sent")
+            log.info("DRY RUN mode -- no clicks")
         log.info("=" * 45)
 
         while self._running:
@@ -84,7 +99,7 @@ class HarvestBot:
                 self.mouse.set_window_offset(rect[0], rect[1])
                 log.info(f"Window: {rect[2]}x{rect[3]} at ({rect[0]},{rect[1]})")
             time.sleep(1)
-            self.state = BotState.SCAN
+            self.state = BotState.CHECK_OK
 
         elif self.state == BotState.SCAN:
             frame = self.capture.capture()
@@ -100,18 +115,14 @@ class HarvestBot:
                 self._save_debug_frame(frame, points)
 
             if points:
-                log.info(f"> FOUND {len(points)} resource(s) on screen ({w}x{h})")
-                for i, (px, py) in enumerate(points[:5]):
-                    log.info(f"  [{i}] at ({px},{py})")
+                log.info(f"> FOUND {len(points)} resource(s)")
                 self._no_resource_streak = 0
-                target = self._pick_best(points, w, h)
-                self._target_screen = target
+                self._target_screen = self._pick_best(points, w, h)
                 self.state = BotState.CLICK_RESOURCE
             else:
                 self._no_resource_streak += 1
-                log.info(f". Scan {self._no_resource_streak}: no resources ({w}x{h})")
+                log.info(f". No resources (streak={self._no_resource_streak})")
                 if self._no_resource_streak >= 3:
-                    log.info("-> EXPLORE mode")
                     self.state = BotState.EXPLORE
                 else:
                     time.sleep(self.config.resource_search_interval)
@@ -121,9 +132,9 @@ class HarvestBot:
                 self.state = BotState.SCAN
                 return
             sx, sy = self._target_screen
-            log.info(f">> Click resource at ({sx}, {sy})")
+            log.info(f">> Right-click resource at ({sx}, {sy})")
             if not self.dry_run:
-                self.mouse.double_click(x=sx, y=sy)
+                self.mouse.click(button="right", x=sx, y=sy)
             self._harvest_start = time.time()
             self.state = BotState.WAIT_HARVEST
 
@@ -132,68 +143,73 @@ class HarvestBot:
             wait = random.uniform(self.config.harvest_wait_min, self.config.harvest_wait_max)
             if elapsed >= wait:
                 self._harvest_count += 1
-                log.info(f"< Harvest #{self._harvest_count} complete ({elapsed:.1f}s)")
+                log.info(f"< Harvest #{self._harvest_count} ({elapsed:.1f}s)")
                 self._target_screen = None
-                self._no_resource_streak = 0
-
-                frame = self.capture.capture()
-                if frame is not None:
-                    remaining = self.detector.find_resource_centers(frame)
-                    if remaining:
-                        log.info(f"  {len(remaining)} resource(s) still visible")
-                self.state = BotState.SCAN
+                self.state = BotState.CHECK_OK
             else:
                 time.sleep(0.3)
 
-        elif self.state == BotState.EXPLORE:
-            clicked = self._try_move()
-            if clicked and not self.dry_run:
-                time.sleep(self.config.move_recheck_interval)
-            self._no_resource_streak = 0
+        elif self.state == BotState.CHECK_OK:
+            if self.dry_run or "ok" not in self.templates._templates:
+                self.state = BotState.SCAN
+                return
+            frame = self.capture.capture()
+            if frame is None:
+                self.state = BotState.SCAN
+                return
+            hh, ww = frame.shape[:2]
+            cx, cy = ww // 2, hh // 2
+            search = frame[cy - 100:cy + 100, cx - 150:cx + 150]
+            result = self.templates.find_template(search, "ok", threshold=0.6)
+            if result:
+                tx, ty, conf = result
+                ax = cx - 150 + tx
+                ay = cy - 100 + ty
+                log.info(f">> Level-up popup detected at ({ax}, {ay}) conf={conf:.2f}")
+                self.mouse.click(x=ax, y=ay)
+                time.sleep(0.5)
             self.state = BotState.SCAN
 
-    def _pick_best(self, points: List[Tuple[int, int]], fw: int, fh: int) -> Tuple[int, int]:
+        elif self.state == BotState.EXPLORE:
+            fw, fh = 1280, 720
+            frame = self.capture.capture()
+            if frame is not None:
+                fh, fw = frame.shape[:2]
+            targets = [
+                (fw // 2, fh // 2 + fh // 6),
+                (fw // 2 - fw // 5, fh // 2 + fh // 8),
+                (fw // 2 + fw // 5, fh // 2 + fh // 8),
+                (fw // 2, fh // 2 - fh // 6),
+            ]
+            t = targets[self._explore_idx % len(targets)]
+            self._explore_idx += 1
+            log.info(f"> Explore click ({t[0]}, {t[1]})")
+            if not self.dry_run:
+                self.mouse.click(x=t[0], y=t[1])
+                time.sleep(self.config.move_recheck_interval)
+            self.state = BotState.SCAN
+
+    def _pick_best(self, points, fw, fh):
         cx, cy = fw // 2, fh // 2
         return min(points, key=lambda p: (p[0] - cx) ** 2 + (p[1] - cy) ** 2)
-
-    def _try_move(self) -> bool:
-        fw, fh = 1280, 720
-        frame = self.capture.capture()
-        if frame is not None:
-            fh, fw = frame.shape[:2]
-
-        explore_targets = [
-            (fw // 2, fh // 2 + fh // 6),
-            (fw // 2 - fw // 5, fh // 2 + fh // 8),
-            (fw // 2 + fw // 5, fh // 2 + fh // 8),
-            (fw // 2, fh // 2 - fh // 6),
-        ]
-        target = explore_targets[self._explore_idx % len(explore_targets)]
-        self._explore_idx += 1
-
-        log.info(f"> Explore: click ({target[0]}, {target[1]})")
-        if not self.dry_run:
-            self.mouse.click(x=target[0], y=target[1])
-        return True
 
     def _save_debug_frame(self, frame, points):
         debug = frame.copy()
         h, w = debug.shape[:2]
-
         for x, y in points:
             cv2.circle(debug, (x, y), 5, (0, 255, 0), 2)
             cv2.drawMarker(debug, (x, y), (0, 255, 0), cv2.MARKER_CROSS, 10, 2)
-
-        info_lines = [
+        info = [
             f"Resources: {len(points)}  State: {self.state.name}",
-            f"Harvests: {self._harvest_count}  Streak: {self._no_resource_streak}",
+            f"Harvests: {self._harvest_count}",
         ]
-        for i, line in enumerate(info_lines):
+        if self.config.active_profile:
+            info.append(f"Profile: {self.config.active_profile}")
+        for i, line in enumerate(info):
             cv2.putText(debug, line, (8, h - 30 + i * 14),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
-
-        path = self._debug_dir / f"debug_{self._screenshot_count:04d}.png"
-        cv2.imwrite(str(path), debug)
+        p = self._debug_dir / f"debug_{self._screenshot_count:04d}.png"
+        cv2.imwrite(str(p), debug)
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         combined = np.zeros(frame.shape[:2], dtype=np.uint8)
@@ -201,7 +217,7 @@ class HarvestBot:
             lo = np.array(r["lower"], dtype=np.uint8)
             hi = np.array(r["upper"], dtype=np.uint8)
             combined = cv2.bitwise_or(combined, cv2.inRange(hsv, lo, hi))
-        mask_path = self._debug_dir / f"mask_{self._screenshot_count:04d}.png"
-        cv2.imwrite(str(mask_path), combined)
+        mp = self._debug_dir / f"mask_{self._screenshot_count:04d}.png"
+        cv2.imwrite(str(mp), combined)
 
         self._screenshot_count += 1
